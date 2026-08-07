@@ -57,11 +57,6 @@ services:
       - ./data:/data
 ```
 
-> **One-time `chmod`:** `replicate-safe` runs as uid 65532 (nonroot), so the
-> host directory needs to be writable by it. `chmod 777 ./data` is fine for a
-> single-tenant backup volume; alternatives are `chown 65532 ./data` or
-> pre-creating files with the right uid.
-
 Then `docker compose pull && docker compose up -d`.
 
 ## Configuration
