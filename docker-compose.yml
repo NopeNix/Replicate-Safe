@@ -1,0 +1,13 @@
+services:
+  replicate-safe:
+    build: .
+    image: replicate-safe:local
+    container_name: replicate-safe
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      OUTPUT_DIR: /data
+      STATE_FILE: /data/.state.json
+    volumes:
+      - ./data:/data
