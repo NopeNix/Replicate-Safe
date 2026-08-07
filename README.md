@@ -1,131 +1,146 @@
 # Replicate-Safe
 
-Don't lose what you paid for. A tiny Docker container that, given a Replicate
-API token, continuously downloads every prediction (and its output files)
-created under that account to a folder on your machine.
+**Don't lose what you paid for.** A tiny Docker container that continuously
+downloads every prediction (and its output files) created under your Replicate
+account to a local folder. Powered by a single env var: your API token.
 
-Lightweight: single static Go binary on `distroless/static` (~10–15 MB image).
+Image on Docker Hub: **[`nopenix/replicate-safe`](https://hub.docker.com/r/nopenix/replicate-safe)** (~15 MB, distroless).
 
-## Quick start
-
-### 1. Get a Replicate API token
-
-Create one at <https://replicate.com/account/api-tokens>. The token must belong
-to the user or organization whose predictions you want to back up.
-
-### 2. Configure
+## Quick start (docker compose)
 
 ```bash
-cp .env.example .env
-# edit .env and paste your token
-```
+mkdir replicate-safe && cd replicate-safe
 
-### 3. Run with docker compose
+# 1. Set your token (get one at https://replicate.com/account/api-tokens)
+cat > .env <<'EOF'
+REPLICATE_API_TOKEN=r8_your_token_here
+POLL_INTERVAL=900
+LOG_LEVEL=info
+EOF
 
-```bash
-chmod 777 ./data        # distroless container runs as uid 65532 (nonroot)
+# 2. Start it. Every 15 minutes it pulls new predictions + outputs into ./data.
 docker compose up -d
-docker compose logs -f replicate-safe
+
+# 3. Watch it work
+docker compose logs -f
 ```
 
-Files will appear in `./data/`. The state file `./data/.state.json` tracks
-which predictions have already been processed.
+That's it. Predictions and their output files appear as a flat dump under
+`./data/`, prefixed with the prediction id so nothing collides:
 
-> **Why `chmod 777`?** The base image `gcr.io/distroless/static:nonroot` runs
-> as user `nonroot` (uid 65532). Docker's bind mount preserves the host
-> directory's ownership, so the container needs write permission. `chmod 777`
-> is fine for a single-tenant backup volume; alternatives are `chown 65532
-> ./data` or pre-creating files with the right uid.
-
-### 4. Or run with plain docker
-
-```bash
-mkdir -p ./data
-chmod 777 ./data         # see note above about nonroot
-docker run -d --name replicate-safe --restart unless-stopped \
-  -e REPLICATE_API_TOKEN=r8_xxxxxxxx \
-  -e POLL_INTERVAL=900 \
-  -v "$(pwd)/data:/data" \
-  replicate-safe:local
+```
+data/
+├── .state.json
+├── 01w9p8j4pdrmw0czsr3bcwtyh4__00_tmpagwigfij.png
+├── 01w9p8j4pdrmw0czsr3bcwtyh4.metadata.json
+├── 7cc8srxcenrmw0czh7fv92jha8__00_tmpjzq4oox6.svg
+└── ...
 ```
 
-(If you used `docker compose build` the image is `replicate-safe:local`;
-otherwise `docker build -t replicate-safe:local .` first.)
+## `docker-compose.yml`
+
+The image is published as [`nopenix/replicate-safe`](https://hub.docker.com/r/nopenix/replicate-safe),
+so you don't need to clone this repo. Drop this file next to a `.env`:
+
+```yaml
+services:
+  replicate-safe:
+    image: nopenix/replicate-safe:latest
+    container_name: replicate-safe
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      OUTPUT_DIR: /data
+      STATE_FILE: /data/.state.json
+    volumes:
+      - ./data:/data
+```
+
+> **One-time `chmod`:** `replicate-safe` runs as uid 65532 (nonroot), so the
+> host directory needs to be writable by it. `chmod 777 ./data` is fine for a
+> single-tenant backup volume; alternatives are `chown 65532 ./data` or
+> pre-creating files with the right uid.
+
+Then `docker compose pull && docker compose up -d`.
 
 ## Configuration
 
-All settings come from environment variables:
+All settings are environment variables. Pulled in via the `.env` file or the
+`environment:` block in compose.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `REPLICATE_API_TOKEN` | — | **required** |
-| `OUTPUT_DIR` | `/data` | Where files land |
+| `REPLICATE_API_TOKEN` | — | **required**, from <https://replicate.com/account/api-tokens> |
+| `OUTPUT_DIR` | `/data` | Where files land inside the container |
 | `STATE_FILE` | `/data/.state.json` | Tracks processed ids |
 | `POLL_INTERVAL` | `900` | Seconds between full passes |
 | `HTTP_TIMEOUT` | `60` | Per-request timeout (seconds) |
 | `WRITE_METADATA` | `true` | Write `<id>.metadata.json` per prediction |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
-## Where files go
+### Pulling a specific version
 
-```
-data/
-├── .state.json
-├── gm3qorzdhgbfurvjtvhg6dckhu__00_output.png
-├── gm3qorzdhgbfurvjtvhg6dckhu.metadata.json
-├── anotherid__00_output.mp4
-└── anotherid.metadata.json
+The image is tagged by branch, short SHA, and semver. Pin to a release for
+predictable behavior:
+
+```yaml
+image: nopenix/replicate-safe:v0.1.0     # specific release
+image: nopenix/replicate-safe:latest     # newest main
+image: nopenix/replicate-safe:main       # same as latest
 ```
 
-Filenames are prefixed with the prediction id and an index (`__00_`, `__01_`,
-…) so that outputs from many predictions can coexist in one folder without
-collisions.
+## What's inside the container
+
+A single static Go binary on `gcr.io/distroless/static:nonroot`. It:
+
+1. On start (and every `POLL_INTERVAL` seconds), lists every prediction your
+   token can see via the Replicate HTTP API.
+2. For each prediction it hasn't seen before, downloads every URL in
+   `output` into `OUTPUT_DIR`, prefixed with `<prediction-id>__<index>_`.
+3. Writes a `<prediction-id>.metadata.json` sidecar with inputs, model,
+   version, status, timestamps, and the raw API response (toggleable).
+4. Persists the set of seen ids in `STATE_FILE` so subsequent passes skip
+   everything already downloaded.
+
+State is saved atomically (tmp file + rename) after every pass, so killing
+the container mid-sync is safe.
 
 ## Caveats (read this)
 
 1. **Replicate purges prediction inputs/outputs ~1 hour after creation** for
-   API-created predictions (per
-   [docs](https://replicate.com/docs/topics/predictions/lifecycle)). Old
-   predictions will return `data_removed=true` and the output URLs will 404.
-   This tool preserves the metadata for those but cannot recover the files.
-   **Run this container continuously** to catch outputs before they expire.
-2. Web-created predictions are queryable for only the last 14 days per docs.
+   API-created predictions. Old predictions return `data_removed=true` and
+   the output URLs 404 — the metadata is still saved but the files are gone.
+   **Run the container continuously** to catch outputs before they expire.
+2. Web-created predictions are queryable for only the last 14 days.
 3. The token must belong to the account that owns the predictions.
-4. Rate limits apply (Replicate enforces ~600 req/min). The tool uses the
-   `seen_ids` set in state to avoid re-processing on each pass, so steady-state
-   API usage is minimal: 1 list request per pass + 1 request per new file.
-5. A flat directory works fine for a few thousand files. If you generate
-   hundreds of thousands, consider migrating to a sub-dirs-by-date layout
-   (not implemented; flat layout is the chosen trade-off for simplicity).
+4. Rate limits apply (~600 req/min). Steady-state usage is minimal: 1 list
+   request per pass + 1 request per new file.
+5. A flat directory works fine up to a few thousand files. For hundreds of
+   thousands, consider a sub-dirs-by-date layout (not implemented).
 6. Downloaded files can be large. Make sure the mounted volume has enough
-   space and is on a filesystem that handles many files well.
+   space.
 
-## Local development
+## Running on a schedule instead of as a daemon
+
+If you'd rather invoke `nopenix/replicate-safe` from cron / systemd timer /
+k8s CronJob, the binary exits cleanly after one pass and updates state on
+shutdown. Just set `POLL_INTERVAL` to a very large value (or fork the
+source to remove the loop — not necessary in practice).
+
+## Building from source
+
+Only needed if you want to hack on it. The image on Docker Hub is built from
+this repo by GitHub Actions on every push to `main`.
 
 ```bash
-go run .                              # uses env from your shell or .env
-go build -o /tmp/replicate-safe . && /tmp/replicate-safe
+git clone https://github.com/NopeNix/Replicate-Safe.git
+cd Replicate-Safe
+go run .                       # uses env from your shell
+docker build -t replicate-safe:dev .
+docker run --rm -e REPLICATE_API_TOKEN=r8_xxx -v "$(pwd)/data:/data" replicate-safe:dev
 ```
-
-Hot reloading is not needed — restart after changes.
-
-## How state works
-
-`data/.state.json` contains:
-
-- `last_created_at` — the newest `created_at` seen (used for human reference)
-- `seen_ids` — every prediction id processed, so subsequent runs skip them
-
-Delete the file to force a full re-pull. On first start with a token that has
-many predictions, the initial pass will walk all pages.
-
-## Why a long-running daemon?
-
-Replicate expires outputs ~1 hour after creation. A daemon that polls every
-15 minutes is the simplest reliable way to catch new predictions before they
-expire. If you'd rather run it on cron, see the plan file in `.kilo/plans/`
-and adapt `main.go` to exit after one pass.
 
 ## License
 
-See `LICENSE`.
+See [`LICENSE`](./LICENSE).
