@@ -659,4 +659,90 @@
 
   // Expose so renderPreview can call it after creating an image/video.
   window.__applyZoom = applyZoom;
+
+  // ============================================================
+  // Resizable file-explorer columns
+  // ============================================================
+  // Each column header (except thumb) has a <span class="col-resizer"
+  // data-resize="name|created|...">. Dragging it updates the
+  // --col-w-<name> CSS variable, which drives the grid-template-columns
+  // for both the header and every row in the list. Each width persists
+  // in its own cookie.
+
+  const COLS_KEY = "replicate-safe-cols";
+  function loadColWidths() {
+    try {
+      const raw = getCookie(COLS_KEY);
+      if (!raw) return null;
+      return JSON.parse(decodeURIComponent(raw));
+    } catch (_) { return null; }
+  }
+  function saveColWidths(widths) {
+    setCookie(COLS_KEY, encodeURIComponent(JSON.stringify(widths)));
+  }
+
+  // Apply persisted widths on boot.
+  const savedCols = loadColWidths();
+  if (savedCols && typeof savedCols === "object") {
+    // Switch the relevant columns from minmax to fixed px so user-resized
+    // widths stick even when the pane is wide.
+    for (const [name, px] of Object.entries(savedCols)) {
+      if (typeof px === "number" && px > 30 && px < 1200) {
+        $root.style.setProperty("--col-w-" + name, px + "px");
+      }
+    }
+  }
+
+  for (const handle of document.querySelectorAll(".col-resizer")) {
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+    let col = "";
+    handle.addEventListener("mousedown", (e) => {
+      col = handle.getAttribute("data-resize");
+      if (!col) return;
+      const span = handle.parentElement;
+      dragging = true;
+      startX = e.clientX;
+      startW = span.getBoundingClientRect().width;
+      document.body.classList.add("resizing-col");
+      handle.classList.add("dragging");
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      let next = Math.max(40, startW + dx);
+      // Hard cap so columns don't run off the pane
+      const max = window.innerWidth * 0.6;
+      next = Math.min(max, next);
+      $root.style.setProperty("--col-w-" + col, next + "px");
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("resizing-col");
+      handle.classList.remove("dragging");
+      const v = parseFloat(getComputedStyle($root).getPropertyValue("--col-w-" + col));
+      if (!isNaN(v)) {
+        const all = loadColWidths() || {};
+        all[col] = Math.round(v);
+        saveColWidths(all);
+      }
+    });
+  }
+
+  // Double-click on a resizer resets that column to its default.
+  for (const handle of document.querySelectorAll(".col-resizer")) {
+    handle.addEventListener("dblclick", () => {
+      const col = handle.getAttribute("data-resize");
+      if (!col) return;
+      // Remove the override so the default in :root applies again.
+      $root.style.removeProperty("--col-w-" + col);
+      const all = loadColWidths() || {};
+      delete all[col];
+      saveColWidths(all);
+    });
+  }
 })();

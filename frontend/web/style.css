@@ -12,6 +12,14 @@
   --radius: 6px;
   --thumb-bg: #f0f0f0;
   --thumb-size: 48px;
+  /* Column widths (file explorer). Each persisted to a cookie. */
+  --col-w-thumb:   calc(var(--thumb-size) + 12px);
+  --col-w-name:    minmax(180px, 2fr);
+  --col-w-created: minmax(120px, 1fr);
+  --col-w-model:   minmax(120px, 1.4fr);
+  --col-w-status:  minmax(80px,  0.7fr);
+  --col-w-time:    minmax(60px,  0.6fr);
+  --col-w-size:    minmax(60px,  0.6fr);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
 }
@@ -134,29 +142,30 @@ input[type="search"]::placeholder { color: var(--muted); }
 
 .actions { display: inline-flex; gap: 8px; }
 
-.preview-size {
-  display: inline-flex;
+.thumbs-bar {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  flex-shrink: 0;
   font-size: 11px;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  padding: 4px 10px;
-  height: 32px;
 }
-.preview-size label {
+.thumbs-bar label {
   cursor: pointer;
   user-select: none;
 }
-.preview-size input[type="range"] {
-  width: 100px;
+.thumbs-bar input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 80px;
   accent-color: var(--accent);
   cursor: pointer;
 }
-.preview-size #size-val {
+.thumbs-bar #size-val {
   font-family: var(--mono);
   font-size: 11px;
   min-width: 38px;
@@ -219,7 +228,14 @@ body.resizing-y, body.resizing-y * {
 .list-header,
 .list li {
   display: grid;
-  grid-template-columns: calc(var(--thumb-size) + 12px) 1.5fr 0.95fr 1.1fr 0.7fr 0.55fr 0.55fr;
+  grid-template-columns:
+    var(--col-w-thumb)
+    var(--col-w-name)
+    var(--col-w-created)
+    var(--col-w-model)
+    var(--col-w-status)
+    var(--col-w-time)
+    var(--col-w-size);
   gap: 10px;
   align-items: center;
   padding: 6px 14px;
@@ -244,6 +260,8 @@ body.resizing-y, body.resizing-y * {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  position: relative;
+  min-width: 0;
 }
 .list-header span[data-sort]:hover { color: var(--fg); }
 .list-header span[data-sort].active { color: var(--fg); }
@@ -258,6 +276,29 @@ body.resizing-y, body.resizing-y * {
   text-align: right;
   justify-content: flex-end;
 }
+
+/* Column resize handles (right edge of each header column except the
+   last, which doesn't need one). */
+.col-resizer {
+  position: absolute;
+  right: -5px;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resizer:hover,
+.col-resizer.dragging {
+  background: var(--accent);
+  opacity: 0.25;
+}
+body.resizing-col,
+body.resizing-col * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 
 .list {
   list-style: none;
@@ -581,7 +622,6 @@ body.resizing-y, body.resizing-y * {
   .list li .col-size,
   .list li .col-created { display: none; }
   input[type="search"] { width: 140px; }
-  .preview-size #size-val { display: none; }
   .footer .credit { display: none; }
 }
 

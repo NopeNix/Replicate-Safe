@@ -17,11 +17,6 @@
       <div class="search">
         <input id="filter" type="search" placeholder="search metadata, prompts, models…" autocomplete="off" />
       </div>
-      <div class="preview-size" title="thumbnail size in file explorer">
-        <label for="size">thumbs</label>
-        <input id="size" type="range" min="20" max="100" step="2" value="48" />
-        <span id="size-val">48px</span>
-      </div>
       <div class="actions">
         <button id="refresh" title="Refresh listing">↻</button>
         <button id="theme" title="Toggle theme">◐</button>
@@ -31,16 +26,21 @@
     <main class="split" id="split">
       <aside class="pane left">
         <div class="list-header" id="list-header">
-          <span class="col-thumb" data-sort=""></span>
-          <span class="col-name" data-sort="filename">file</span>
-          <span class="col-created" data-sort="created_at">created</span>
-          <span class="col-model" data-sort="model">model</span>
-          <span class="col-status" data-sort="status">status</span>
-          <span class="col-time" data-sort="time_to_make">time</span>
-          <span class="col-size" data-sort="size">size</span>
+          <span class="col-thumb" data-col="thumb" data-sort=""></span>
+          <span class="col-name" data-col="name" data-sort="filename">file<span class="col-resizer" data-resize="name"></span></span>
+          <span class="col-created" data-col="created" data-sort="created_at">created<span class="col-resizer" data-resize="created"></span></span>
+          <span class="col-model" data-col="model" data-sort="model">model<span class="col-resizer" data-resize="model"></span></span>
+          <span class="col-status" data-col="status" data-sort="status">status<span class="col-resizer" data-resize="status"></span></span>
+          <span class="col-time" data-col="time" data-sort="time_to_make">time<span class="col-resizer" data-resize="time"></span></span>
+          <span class="col-size" data-col="size" data-sort="size">size<span class="col-resizer" data-resize="size"></span></span>
         </div>
         <ul id="list" class="list" tabindex="0" aria-label="Predictions"></ul>
         <div id="empty" class="empty" hidden>no predictions yet</div>
+        <div class="thumbs-bar">
+          <label for="size">thumbs</label>
+          <input id="size" type="range" min="20" max="100" step="2" value="48" />
+          <span id="size-val">48px</span>
+        </div>
       </aside>
       <div class="resizer resizer-x" id="split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize panels"></div>
 
