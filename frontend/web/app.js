@@ -28,6 +28,13 @@
   const $shareWa = document.getElementById("share-whatsapp");
   const $copyLink = document.getElementById("copy-link");
   const $copyImage = document.getElementById("copy-image");
+  const $zoomControls = document.getElementById("zoom-controls");
+  const $zoomVal = document.getElementById("zoom-val");
+  const $zoomIn = document.getElementById("zoom-in");
+  const $zoomOut = document.getElementById("zoom-out");
+  const $zoomReset = document.getElementById("zoom-reset");
+  const $splitResizer = document.getElementById("split-resizer");
+  const $metaHandle = document.getElementById("meta-handle");
 
   // ----- theme -----
   const THEME_KEY = "replicate-safe-theme";
@@ -280,6 +287,8 @@
     $download.href = fileUrl;
     $download.setAttribute("download", e.filename);
     $toolbar.classList.toggle("is-image", e.preview_kind === "image");
+    $zoomControls.hidden = e.preview_kind !== "image" && e.preview_kind !== "video";
+    $metaHandle.hidden = false;
     // Share URLs (built lazily so the latest origin is used)
     const shareText = e.filename;
     $shareTg.href = "https://t.me/share/url?url=" + encodeURIComponent(fileUrl) + "&text=" + encodeURIComponent(shareText);
@@ -296,12 +305,14 @@
         el = document.createElement("img");
         el.alt = e.filename;
         el.src = url;
+        el.style.transform = "scale(" + zoom + ")";
         break;
       case "video":
         el = document.createElement("video");
         el.src = url;
         el.controls = true;
         el.preload = "metadata";
+        el.style.transform = "scale(" + zoom + ")";
         break;
       case "audio":
         el = document.createElement("audio");
@@ -527,4 +538,125 @@
     if (hashId && entries.find((e) => e.id === hashId)) selectEntry(hashId);
   });
   setInterval(() => { if (Date.now() >= nextRefreshAt) loadList(); }, 5_000);
+
+  // ============================================================
+  // Resizable panels + image zoom
+  // ============================================================
+
+  // ---- split divider (file explorer vs preview) ----
+  const SPLIT_KEY = "replicate-safe-split";
+  const savedSplit = parseInt(getCookie(SPLIT_KEY), 10);
+  if (savedSplit > 0) {
+    $root.style.setProperty("--split-left", savedSplit + "px");
+  }
+  if ($splitResizer) {
+    let dragging = false;
+    let startX = 0;
+    let startLeft = 0;
+    $splitResizer.addEventListener("mousedown", (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startLeft = $splitResizer.parentElement.firstElementChild.getBoundingClientRect().width;
+      document.body.classList.add("resizing");
+      $splitResizer.classList.add("dragging");
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX;
+      const min = 280, max = window.innerWidth - 360;
+      let next = Math.max(min, Math.min(max, startLeft + dx));
+      $root.style.setProperty("--split-left", next + "px");
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("resizing");
+      $splitResizer.classList.remove("dragging");
+      const px = parseFloat(getComputedStyle($root).getPropertyValue("--split-left"));
+      if (!isNaN(px)) setCookie(SPLIT_KEY, Math.round(px));
+    });
+  }
+
+  // ---- metadata height handle ----
+  const META_KEY = "replicate-safe-meta-height";
+  const savedMeta = parseInt(getCookie(META_KEY), 10);
+  if (savedMeta > 80) {
+    $root.style.setProperty("--meta-height", savedMeta + "px");
+  }
+  if ($metaHandle) {
+    let dragging = false;
+    let startY = 0;
+    let startH = 0;
+    $metaHandle.addEventListener("mousedown", (e) => {
+      dragging = true;
+      startY = e.clientY;
+      startH = $meta.parentElement.querySelector("#meta").getBoundingClientRect().height;
+      document.body.classList.add("resizing-y");
+      $metaHandle.classList.add("dragging");
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      // Dragging UP increases the metadata height (since the handle is at the top).
+      const dy = startY - e.clientY;
+      const min = 80, max = window.innerHeight - 200;
+      let next = Math.max(min, Math.min(max, startH + dy));
+      $root.style.setProperty("--meta-height", next + "px");
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("resizing-y");
+      $metaHandle.classList.remove("dragging");
+      const px = parseFloat(getComputedStyle($root).getPropertyValue("--meta-height"));
+      if (!isNaN(px)) setCookie(META_KEY, Math.round(px));
+    });
+  }
+
+  // ---- image zoom ----
+  const ZOOM_STEP = 1.25;
+  const ZOOM_MIN = 0.25;
+  const ZOOM_MAX = 16;
+  const ZOOM_KEY = "replicate-safe-zoom";
+  let zoom = parseFloat(getCookie(ZOOM_KEY)) || 1;
+
+  function applyZoom() {
+    const el = $preview.querySelector("img, video");
+    if (el) {
+      el.style.transform = "scale(" + zoom + ")";
+    }
+    $zoomVal.textContent = Math.round(zoom * 100) + "%";
+    setCookie(ZOOM_KEY, zoom.toFixed(3));
+  }
+  function setZoom(z) {
+    zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    applyZoom();
+  }
+  function resetZoom() { setZoom(1); }
+
+  if ($zoomIn)  $zoomIn.addEventListener("click", () => setZoom(zoom * ZOOM_STEP));
+  if ($zoomOut) $zoomOut.addEventListener("click", () => setZoom(zoom / ZOOM_STEP));
+  if ($zoomReset) $zoomReset.addEventListener("click", resetZoom);
+
+  // Wheel-to-zoom inside the preview area when ctrl/cmd is held (standard
+  // browser zoom gesture). Otherwise let the wheel scroll normally.
+  $preview.addEventListener("wheel", (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!$preview.querySelector("img, video")) return;
+    e.preventDefault();
+    setZoom(zoom * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+  }, { passive: false });
+
+  // Keyboard: when the preview has an image/video focused, +/-/0 zoom.
+  document.addEventListener("keydown", (e) => {
+    if (e.target === $filter) return;
+    if (!$preview.querySelector("img, video")) return;
+    if (e.key === "+" || e.key === "=") { setZoom(zoom * ZOOM_STEP); e.preventDefault(); }
+    else if (e.key === "-" || e.key === "_") { setZoom(zoom / ZOOM_STEP); e.preventDefault(); }
+    else if (e.key === "0") { resetZoom(); e.preventDefault(); }
+  });
+
+  // Expose so renderPreview can call it after creating an image/video.
+  window.__applyZoom = applyZoom;
 })();
