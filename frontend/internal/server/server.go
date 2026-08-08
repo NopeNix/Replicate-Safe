@@ -42,6 +42,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/metadata", s.handleMetadata)
 	mux.HandleFunc("/file", s.handleFile)
 	mux.HandleFunc("/thumb", s.handleThumb)
+	mux.HandleFunc("/convert", s.handleConvert)
 
 	staticFS, err := fs.Sub(s.WebFS, "web")
 	if err == nil {
@@ -190,6 +191,70 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
 	_, _ = io.Copy(w, &buf)
+}
+
+// handleConvert re-encodes the first output image for a prediction into a
+// different format and returns it as an attachment. Supports input formats
+// the imaging package can decode (JPEG, PNG, GIF) and output formats it can
+// encode (JPEG, PNG, GIF, BMP, TIFF).
+//
+// Usage: GET /convert?id=<prediction-id>&to=<jpg|png|gif|bmp|tiff>
+func (s *Server) handleConvert(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	to := strings.ToLower(r.URL.Query().Get("to"))
+	if !validID(id) {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid id"))
+		return
+	}
+	format, ok := convertFormats[to]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unsupported target format: %q (use jpg, png, gif, bmp, tiff)", to))
+		return
+	}
+	base, err := listing.FirstOutputFor(s.DataDir, id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	srcPath := filepath.Clean(filepath.Join(s.DataDir, base))
+	if !strings.HasPrefix(srcPath, s.DataDir+string(os.PathSeparator)) {
+		writeErr(w, http.StatusBadRequest, errors.New("path escapes data dir"))
+		return
+	}
+
+	src, err := imaging.Open(srcPath, imaging.AutoOrientation(true))
+	if err != nil {
+		writeErr(w, http.StatusUnsupportedMediaType, fmt.Errorf("cannot decode source image: %w (WebP, AVIF, and SVG are not supported by the converter)", err))
+		return
+	}
+
+	var buf bytes.Buffer
+	if err := imaging.Encode(&buf, src, format.format, format.options...); err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("encode: %w", err))
+		return
+	}
+
+	outName := id + "." + to
+	w.Header().Set("Content-Type", format.mime)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+outName+`"`)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	_, _ = io.Copy(w, &buf)
+}
+
+type convertTarget struct {
+	format  imaging.Format
+	options []imaging.EncodeOption
+	mime    string
+}
+
+var convertFormats = map[string]convertTarget{
+	"jpg":  {imaging.JPEG, []imaging.EncodeOption{imaging.JPEGQuality(90)}, "image/jpeg"},
+	"jpeg": {imaging.JPEG, []imaging.EncodeOption{imaging.JPEGQuality(90)}, "image/jpeg"},
+	"png":  {imaging.PNG, nil, "image/png"},
+	"gif":  {imaging.GIF, nil, "image/gif"},
+	"bmp":  {imaging.BMP, nil, "image/bmp"},
+	"tiff": {imaging.TIFF, nil, "image/tiff"},
 }
 
 // resolveFile pulls id and optional file out of the query and resolves the

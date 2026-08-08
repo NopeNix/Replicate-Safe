@@ -21,6 +21,9 @@
   const $size = document.getElementById("size");
   const $sizeVal = document.getElementById("size-val");
   const $listHeader = document.getElementById("list-header");
+  const $toolbar = document.getElementById("toolbar");
+  const $download = document.getElementById("download-btn");
+  const $convert = document.getElementById("convert-to");
 
   // ----- theme -----
   const THEME_KEY = "replicate-safe-theme";
@@ -262,9 +265,18 @@
       const p = document.createElement("p");
       p.textContent = "Select a file on the left to preview.";
       $preview.appendChild(p);
+      $toolbar.hidden = true;
+      $toolbar.classList.remove("is-image");
+      $download.removeAttribute("href");
       return;
     }
+    $toolbar.hidden = false;
     const url = "/file?id=" + encodeURIComponent(e.id);
+    $download.href = url;
+    $download.setAttribute("download", e.filename);
+    $toolbar.classList.toggle("is-image", e.preview_kind === "image");
+    // reset convert picker whenever a new entry is selected
+    if ($convert) $convert.value = "";
     let el;
     switch (e.preview_kind) {
       case "image":
@@ -371,6 +383,27 @@
   });
 
   $refresh.addEventListener("click", () => loadList());
+
+  // ----- convert dropdown -----
+  if ($convert) {
+    $convert.addEventListener("change", () => {
+      const to = $convert.value;
+      if (!to || !selectedId) return;
+      const url = "/convert?id=" + encodeURIComponent(selectedId) + "&to=" + encodeURIComponent(to);
+      // Trigger a download. A temporary <a> with download attribute is the
+      // most reliable cross-browser way; the server sends Content-Disposition
+      // too, but this gives us the right filename even without it.
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = selectedId + "." + to;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Reset the select so re-picking the same format still fires.
+      $convert.value = "";
+    });
+  }
 
   document.addEventListener("keydown", (ev) => {
     if (ev.target === $filter) return;
