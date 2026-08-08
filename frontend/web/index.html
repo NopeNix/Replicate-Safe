@@ -15,7 +15,12 @@
       </div>
       <div class="spacer"></div>
       <div class="search">
-        <input id="filter" type="search" placeholder="filter by model, id, status…" autocomplete="off" />
+        <input id="filter" type="search" placeholder="search metadata, prompts, models…" autocomplete="off" />
+      </div>
+      <div class="preview-size" title="preview size">
+        <label for="size">size</label>
+        <input id="size" type="range" min="40" max="100" step="2" value="70" />
+        <span id="size-val">70%</span>
       </div>
       <div class="actions">
         <button id="refresh" title="Refresh listing">↻</button>
@@ -25,12 +30,14 @@
 
     <main class="split">
       <aside class="pane left">
-        <div class="list-header">
-          <span class="col-name">file</span>
-          <span class="col-model">model</span>
-          <span class="col-status">status</span>
-          <span class="col-time">time</span>
-          <span class="col-size">size</span>
+        <div class="list-header" id="list-header">
+          <span class="col-thumb" data-sort=""></span>
+          <span class="col-name" data-sort="filename">file</span>
+          <span class="col-created" data-sort="created_at">created</span>
+          <span class="col-model" data-sort="model">model</span>
+          <span class="col-status" data-sort="status">status</span>
+          <span class="col-time" data-sort="time_to_make">time</span>
+          <span class="col-size" data-sort="size">size</span>
         </div>
         <ul id="list" class="list" tabindex="0" aria-label="Predictions"></ul>
         <div id="empty" class="empty" hidden>no predictions yet</div>

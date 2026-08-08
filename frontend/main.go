@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -32,8 +31,6 @@ func main() {
 func run() error {
 	dataDir := getenv("DATA_DIR", "/data")
 	addr := getenv("LISTEN_ADDR", ":8080")
-	cacheSecs, _ := strconv.Atoi(getenv("CACHE_TTL", "5"))
-	cacheTTL := time.Duration(cacheSecs) * time.Second
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -43,15 +40,13 @@ func run() error {
 	log.Info("starting replicate-safe-frontend",
 		"data_dir", dataDir,
 		"listen", addr,
-		"cache_ttl", cacheTTL,
 	)
 
 	srv := &server.Server{
-		DataDir:  dataDir,
-		WebFS:    webFS,
-		Addr:     addr,
-		CacheTTL: cacheTTL,
-		Log:      log,
+		DataDir: dataDir,
+		WebFS:   webFS,
+		Addr:    addr,
+		Log:     log,
 	}
 
 	httpSrv := &http.Server{

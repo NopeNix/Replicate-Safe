@@ -3,3 +3,4 @@ data/
 .replicate-safe/
 *.log
 .kilo/
+docker-compose.local.yml

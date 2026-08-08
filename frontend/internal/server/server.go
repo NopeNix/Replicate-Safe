@@ -3,9 +3,14 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -15,48 +20,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/disintegration/imaging"
+
 	"github.com/phil/Replicate-Safe/frontend/internal/listing"
 )
 
+const thumbSize = 128
+
 // Server holds the config and serves from a single data directory.
 type Server struct {
-	DataDir   string
-	WebFS     fs.FS // embedded static assets
-	Addr      string
-	CacheTTL  time.Duration
-	Log       *slog.Logger
-	cacheMu   cacheMu
-	cache     []listing.Entry
-	cacheTime time.Time
-}
-
-type cacheMu struct{ /* placeholder; mutex added below */ }
-
-func (s *Server) cacheLoad() ([]listing.Entry, error) {
-	now := time.Now()
-	if s.cache != nil && now.Sub(s.cacheTime) < s.CacheTTL {
-		return s.cache, nil
-	}
-	entries, err := listing.Load(s.DataDir)
-	if err != nil {
-		return nil, err
-	}
-	s.cache = entries
-	s.cacheTime = now
-	return entries, nil
+	DataDir string
+	WebFS   fs.FS
+	Addr    string
+	Log     *slog.Logger
 }
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// API
 	mux.HandleFunc("/api/predictions", s.handleList)
 	mux.HandleFunc("/api/metadata", s.handleMetadata)
-
-	// File streaming
 	mux.HandleFunc("/file", s.handleFile)
+	mux.HandleFunc("/thumb", s.handleThumb)
 
-	// Static frontend
 	staticFS, err := fs.Sub(s.WebFS, "web")
 	if err == nil {
 		mux.Handle("/", http.FileServer(http.FS(staticFS)))
@@ -71,10 +57,14 @@ func (s *Server) Routes() http.Handler {
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.cacheLoad()
+	q := r.URL.Query().Get("q")
+	entries, err := listing.Load(s.DataDir, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	if entries == nil {
+		entries = []listing.Entry{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -85,10 +75,6 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("missing id"))
-		return
-	}
 	if !validID(id) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid id"))
 		return
@@ -107,57 +93,21 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// handleFile streams a file from the data directory. ?id=<prediction id>
-// resolves to the first matching output file for that prediction. Optional
-// &file= picks a specific output when a prediction produced
-// several.
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	name := r.URL.Query().Get("file")
-	if id == "" {
-		writeErr(w, http.StatusBadRequest, errors.New("missing id"))
+	id, name, err := s.resolveFile(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if !validID(id) {
-		writeErr(w, http.StatusBadRequest, errors.New("invalid id"))
-		return
-	}
-
-	target := name
-	if target == "" {
-		// Find first output file for this prediction.
-		matches, err := filepath.Glob(filepath.Join(s.DataDir, id+"__*"))
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		// Filter out metadata sidecars (already excluded by pattern, but
-		// defensively keep only real output files).
-		var outs []string
-		for _, m := range matches {
-			base := filepath.Base(m)
-			if !strings.HasSuffix(base, ".metadata.json") && strings.Contains(base, "__") {
-				outs = append(outs, m)
-			}
-		}
-		if len(outs) == 0 {
-			writeErr(w, http.StatusNotFound, errors.New("no output for prediction"))
-			return
-		}
-		target = filepath.Base(outs[0])
-	}
-
-	// Defense in depth: ensure the resolved path is inside DataDir.
-	clean := filepath.Clean(filepath.Join(s.DataDir, target))
+	clean := filepath.Clean(filepath.Join(s.DataDir, name))
 	if !strings.HasPrefix(clean, s.DataDir+string(os.PathSeparator)) && clean != s.DataDir {
 		writeErr(w, http.StatusBadRequest, errors.New("path escapes data dir"))
 		return
 	}
-	if !strings.HasPrefix(target, id+"__") {
+	if !strings.HasPrefix(name, id+"__") {
 		writeErr(w, http.StatusBadRequest, errors.New("file does not belong to id"))
 		return
 	}
-
 	f, err := os.Open(clean)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -168,7 +118,6 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-
 	stat, err := f.Stat()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -178,13 +127,118 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("is a directory"))
 		return
 	}
-
-	mime := mimeByName(target)
+	mime := mimeByName(name)
 	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
 	w.Header().Set("Cache-Control", "private, max-age=3600")
-	w.Header().Set("Content-Disposition", `inline; filename="`+url.PathEscape(target)+`"`)
-	http.ServeContent(w, r, target, stat.ModTime(), f)
+	w.Header().Set("Content-Disposition", `inline; filename="`+url.PathEscape(name)+`"`)
+	http.ServeContent(w, r, name, stat.ModTime(), f)
+}
+
+func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
+	id, name, err := s.resolveFile(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	clean := filepath.Clean(filepath.Join(s.DataDir, name))
+	if !strings.HasPrefix(clean, s.DataDir+string(os.PathSeparator)) && clean != s.DataDir {
+		writeErr(w, http.StatusBadRequest, errors.New("path escapes data dir"))
+		return
+	}
+	if !strings.HasPrefix(name, id+"__") {
+		writeErr(w, http.StatusBadRequest, errors.New("file does not belong to id"))
+		return
+	}
+
+	// Only resize images. Other types get a generic SVG icon (so the
+	// browser doesn't try to render a video as a thumbnail).
+	kind := listingKind(name)
+	if kind != "image" {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		_, _ = w.Write([]byte(iconForKind(kind)))
+		return
+	}
+
+	// Avoid wasted work on huge files for a tiny thumbnail.
+	src, err := imaging.Open(clean, imaging.AutoOrientation(true))
+	if err != nil {
+		// Fall back to the original file (let the browser scale). This
+		// handles SVG, WebP, AVIF, etc. that imaging can't decode.
+		f, ferr := os.Open(clean)
+		if ferr != nil {
+			writeErr(w, http.StatusNotFound, ferr)
+			return
+		}
+		defer f.Close()
+		stat, _ := f.Stat()
+		w.Header().Set("Content-Type", mimeByName(name))
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+		http.ServeContent(w, r, name, stat.ModTime(), f)
+		return
+	}
+
+	thumb := imaging.Fit(src, thumbSize, thumbSize, imaging.Lanczos)
+	var buf bytes.Buffer
+	if err := imaging.Encode(&buf, thumb, imaging.JPEG, imaging.JPEGQuality(80)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
+	_, _ = io.Copy(w, &buf)
+}
+
+// resolveFile pulls id and optional file out of the query and resolves the
+// first output file for that prediction if no file is given.
+func (s *Server) resolveFile(r *http.Request) (id, name string, err error) {
+	id = r.URL.Query().Get("id")
+	if !validID(id) {
+		return "", "", errors.New("invalid id")
+	}
+	name = r.URL.Query().Get("file")
+	if name != "" {
+		return id, name, nil
+	}
+	base, err := listing.FirstOutputFor(s.DataDir, id)
+	if err != nil {
+		return "", "", fmt.Errorf("no output for prediction: %w", err)
+	}
+	return id, base, nil
+}
+
+// listingKind is a duplicate of the helper in listing so the server doesn't
+// have to read the entry off disk again. Kept simple: classify by extension.
+func listingKind(name string) string {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico", ".tif", ".tiff":
+		return "image"
+	case ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".ogv":
+		return "video"
+	case ".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus":
+		return "audio"
+	case ".txt", ".md", ".csv", ".log", ".srt":
+		return "text"
+	}
+	return "other"
+}
+
+func iconForKind(kind string) string {
+	const base = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"><rect width="64" height="64" fill="#1f1f1f" rx="8"/>`
+	switch kind {
+	case "video":
+		return base + `<polygon points="24,18 24,46 48,32" fill="#f3f3f3"/></svg>`
+	case "audio":
+		return base + `<g fill="#f3f3f3"><rect x="30" y="14" width="4" height="20"/><rect x="22" y="22" width="4" height="14"/><rect x="38" y="22" width="4" height="14"/><rect x="14" y="28" width="4" height="10"/><rect x="46" y="28" width="4" height="10"/></g></svg>`
+	case "text":
+		return base + `<g fill="#f3f3f3"><rect x="16" y="16" width="32" height="3"/><rect x="16" y="24" width="32" height="3"/><rect x="16" y="32" width="32" height="3"/><rect x="16" y="40" width="22" height="3"/></g></svg>`
+	default:
+		return base + `<text x="32" y="42" text-anchor="middle" font-family="monospace" font-size="14" fill="#f3f3f3">FILE</text></svg>`
+	}
 }
 
 func mimeByName(name string) string {

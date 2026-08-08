@@ -4,8 +4,9 @@
   // ----- state -----
   let entries = [];
   let selectedId = null;
-  let filterText = "";
   let nextRefreshAt = 0;
+  let searchSeq = 0;
+  let sort = { field: "created_at", dir: "desc" }; // default: newest first
 
   // ----- elements -----
   const $list = document.getElementById("list");
@@ -17,6 +18,9 @@
   const $meta = document.getElementById("meta");
   const $metaContent = document.getElementById("meta-content");
   const $root = document.documentElement;
+  const $size = document.getElementById("size");
+  const $sizeVal = document.getElementById("size-val");
+  const $listHeader = document.getElementById("list-header");
 
   // ----- theme -----
   const THEME_KEY = "replicate-safe-theme";
@@ -37,9 +41,35 @@
     $root.setAttribute("data-theme", next);
   });
 
+  // ----- preview size slider (cookie-persisted) -----
+  const PREVIEW_COOKIE = "replicate-safe-preview";
+  const PREVIEW_DEFAULT = 70;
+  function setPreviewSize(pct) {
+    pct = Math.max(20, Math.min(100, Math.round(pct)));
+    $size.value = pct;
+    $sizeVal.textContent = pct + "%";
+    // Map 20..100 slider -> 20vh..90vh preview max
+    const vh = Math.round(20 + (pct - 20) * (70 / 80));
+    document.documentElement.style.setProperty("--preview-max", vh + "vh");
+    setCookie(PREVIEW_COOKIE, pct);
+  }
+  setPreviewSize(parseInt(getCookie(PREVIEW_COOKIE), 10) || PREVIEW_DEFAULT);
+  $size.addEventListener("input", (e) => setPreviewSize(parseInt(e.target.value, 10)));
+
+  // ----- cookie helpers -----
+  function setCookie(name, value) {
+    const d = new Date();
+    d.setTime(d.getTime() + 365 * 86400 * 1000);
+    document.cookie = name + "=" + value + ";expires=" + d.toUTCString() + ";path=/;SameSite=Lax";
+  }
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp("(?:^|;\\s*)" + name + "\\s*=\\s*([^;]+)"));
+    return m ? m[1] : "";
+  }
+
   // ----- helpers -----
   const fmtSize = (n) => {
-    if (!n && n !== 0) return "—";
+    if (n == null) return "—";
     const units = ["B", "KB", "MB", "GB", "TB"];
     let i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
@@ -51,13 +81,17 @@
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
     const pad = (n) => String(n).padStart(2, "0");
-    return (
-      d.getFullYear() + "-" +
-      pad(d.getMonth() + 1) + "-" +
-      pad(d.getDate()) + " " +
-      pad(d.getHours()) + ":" +
-      pad(d.getMinutes())
-    );
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+      + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  };
+
+  const fmtDateCompact = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const pad = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+      + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
   };
 
   const fmtDuration = (secs) => {
@@ -76,35 +110,118 @@
     return span;
   };
 
-  const matches = (e, q) => {
-    if (!q) return true;
-    const hay = (
-      (e.id || "") + " " +
-      (e.model || "") + " " +
-      (e.status || "") + " " +
-      (e.filename || "") + " " +
-      (e.version || "")
-    ).toLowerCase();
-    return hay.includes(q);
+  // ----- sort -----
+  const sortEntries = () => {
+    const f = sort.field;
+    const asc = sort.dir === "asc";
+    const get = (e) => {
+      switch (f) {
+        case "filename": return (e.filename || "").toLowerCase();
+        case "model": return (e.model || "").toLowerCase();
+        case "status": return (e.status || "").toLowerCase();
+        case "time_to_make": return e.time_to_make || 0;
+        case "size": return e.size || 0;
+        case "created_at": {
+          const t = e.created_at ? new Date(e.created_at).getTime() : NaN;
+          return isNaN(t) ? null : t;
+        }
+      }
+      return null;
+    };
+    entries.sort((a, b) => {
+      const av = get(a), bv = get(b);
+      // nulls/missing always at the bottom regardless of direction
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (av < bv) return asc ? -1 : 1;
+      if (av > bv) return asc ? 1 : -1;
+      return 0;
+    });
+    updateSortHeader();
+  };
+
+  const updateSortHeader = () => {
+    for (const span of $listHeader.querySelectorAll("span[data-sort]")) {
+      const f = span.getAttribute("data-sort");
+      const isActive = f === sort.field;
+      span.classList.toggle("active", isActive);
+      let arrow = span.querySelector(".sort-arrow");
+      if (!isActive) {
+        if (arrow) arrow.remove();
+        continue;
+      }
+      if (!arrow) {
+        arrow = document.createElement("span");
+        arrow.className = "sort-arrow";
+        span.appendChild(arrow);
+      }
+      arrow.textContent = sort.dir === "asc" ? "▲" : "▼";
+    }
+  };
+
+  $listHeader.addEventListener("click", (e) => {
+    const span = e.target.closest("span[data-sort]");
+    if (!span) return;
+    const field = span.getAttribute("data-sort");
+    if (sort.field === field) {
+      sort.dir = sort.dir === "asc" ? "desc" : "asc";
+    } else {
+      sort.field = field;
+      sort.dir = "asc";
+    }
+    sortEntries();
+    renderList();
+  });
+
+  // ----- thumbnail rendering -----
+  const renderThumb = (e) => {
+    const wrap = document.createElement("div");
+    wrap.className = "col-thumb";
+    if (e.preview_kind === "image") {
+      const img = document.createElement("img");
+      img.src = "/thumb?id=" + encodeURIComponent(e.id);
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      wrap.appendChild(img);
+    } else {
+      // inline SVG icon, no server roundtrip
+      wrap.innerHTML = ICON_BY_KIND[e.preview_kind] || ICON_BY_KIND.other;
+    }
+    return wrap;
+  };
+
+  const ICON_BY_KIND = {
+    video: '<svg viewBox="0 0 64 64" width="32" height="32"><rect width="64" height="64" fill="#1f1f1f" rx="8"/><polygon points="24,18 24,46 48,32" fill="#f3f3f3"/></svg>',
+    audio: '<svg viewBox="0 0 64 64" width="32" height="32"><rect width="64" height="64" fill="#1f1f1f" rx="8"/><g fill="#f3f3f3"><rect x="30" y="14" width="4" height="20"/><rect x="22" y="22" width="4" height="14"/><rect x="38" y="22" width="4" height="14"/><rect x="14" y="28" width="4" height="10"/><rect x="46" y="28" width="4" height="10"/></g></svg>',
+    text:  '<svg viewBox="0 0 64 64" width="32" height="32"><rect width="64" height="64" fill="#1f1f1f" rx="8"/><g fill="#f3f3f3"><rect x="16" y="16" width="32" height="3"/><rect x="16" y="24" width="32" height="3"/><rect x="16" y="32" width="32" height="3"/><rect x="16" y="40" width="22" height="3"/></g></svg>',
+    other: '<svg viewBox="0 0 64 64" width="32" height="32"><rect width="64" height="64" fill="#1f1f1f" rx="8"/><text x="32" y="42" text-anchor="middle" font-family="monospace" font-size="14" fill="#f3f3f3">FILE</text></svg>',
   };
 
   // ----- list rendering -----
   const renderList = () => {
     $list.innerHTML = "";
-    const q = filterText.trim().toLowerCase();
     let count = 0;
     for (const e of entries) {
-      if (!matches(e, q)) continue;
       count++;
       const li = document.createElement("li");
       li.dataset.id = e.id;
       if (e.id === selectedId) li.classList.add("selected");
+
+      li.appendChild(renderThumb(e));
 
       const cName = document.createElement("span");
       cName.className = "col-name";
       cName.textContent = e.filename;
       cName.title = e.filename;
       li.appendChild(cName);
+
+      const cCreated = document.createElement("span");
+      cCreated.className = "col-created";
+      cCreated.textContent = fmtDateCompact(e.created_at);
+      cCreated.title = e.created_at || "";
+      li.appendChild(cCreated);
 
       const cModel = document.createElement("span");
       cModel.className = "col-model";
@@ -170,7 +287,7 @@
         el.style.width = "100%";
         el.style.height = "60vh";
         el.style.border = "none";
-        el.style.background = "var(--hover)";
+        el.style.background = "var(--bg)";
         break;
       }
       default: {
@@ -194,21 +311,11 @@
   const renderMeta = async (id) => {
     try {
       const res = await fetch("/api/metadata?id=" + encodeURIComponent(id));
-      if (res.status === 404) {
-        $meta.hidden = true;
-        return;
-      }
-      if (!res.ok) {
-        $metaContent.textContent = "Failed to load metadata: " + res.status;
-        $meta.hidden = false;
-        return;
-      }
+      if (res.status === 404) { $meta.hidden = true; return; }
+      if (!res.ok) { $metaContent.textContent = "Failed to load metadata: " + res.status; $meta.hidden = false; return; }
       const text = await res.text();
-      // Pretty-print JSON if it parses.
       let pretty = text;
-      try {
-        pretty = JSON.stringify(JSON.parse(text), null, 2);
-      } catch (_) { /* not json, leave raw */ }
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { /* not json */ }
       $metaContent.textContent = pretty;
       $meta.hidden = false;
     } catch (err) {
@@ -232,11 +339,16 @@
 
   // ----- data loading -----
   const loadList = async () => {
+    const seq = ++searchSeq;
+    const q = $filter.value.trim();
     try {
-      const res = await fetch("/api/predictions", { cache: "no-store" });
+      const url = "/api/predictions" + (q ? "?q=" + encodeURIComponent(q) : "");
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
+      if (seq !== searchSeq) return; // a newer request superseded us
       entries = Array.isArray(data) ? data : [];
+      sortEntries();
       renderList();
       if (selectedId && !entries.find((e) => e.id === selectedId)) {
         selectedId = null;
@@ -250,12 +362,13 @@
   };
 
   // ----- events -----
-  $filter.addEventListener("input", (ev) => {
-    filterText = ev.target.value;
-    renderList();
+  let filterTimer = null;
+  $filter.addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadList, 200);
   });
 
-  $refresh.addEventListener("click", () => { loadList(); });
+  $refresh.addEventListener("click", () => loadList());
 
   document.addEventListener("keydown", (ev) => {
     if (ev.target === $filter) return;
@@ -276,13 +389,10 @@
   });
 
   // ----- bootstrap -----
+  updateSortHeader();
   loadList().then(() => {
     const hashId = decodeURIComponent((location.hash || "").replace(/^#/, ""));
-    if (hashId && entries.find((e) => e.id === hashId)) {
-      selectEntry(hashId);
-    }
+    if (hashId && entries.find((e) => e.id === hashId)) selectEntry(hashId);
   });
-  setInterval(() => {
-    if (Date.now() >= nextRefreshAt) loadList();
-  }, 5_000);
+  setInterval(() => { if (Date.now() >= nextRefreshAt) loadList(); }, 5_000);
 })();

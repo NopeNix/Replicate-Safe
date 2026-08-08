@@ -15,9 +15,7 @@ import (
 	"time"
 )
 
-const (
-	idSep = "__" // separator written by the backend between prediction id and index
-)
+const idSep = "__" // separator written by the backend between prediction id and index
 
 // Entry is one row in the listing. One per output file on disk.
 type Entry struct {
@@ -25,20 +23,27 @@ type Entry struct {
 	Filename    string  `json:"filename"`     // basename as written on disk
 	Path        string  `json:"-"`            // full path, never sent to client
 	Size        int64   `json:"size"`         // bytes
-	Model       string  `json:"model"`        // e.g. "black-forest-labs/flux-schnell"
-	Version     string  `json:"version"`      // short version id (first 12 chars)
-	Status      string  `json:"status"`       // succeeded/failed/canceled/...
-	CreatedAt   string  `json:"created_at"`   // ISO 8601, "" if unknown
-	CompletedAt string  `json:"completed_at"` // ISO 8601, "" if unknown
-	TimeToMake  float64 `json:"time_to_make"` // seconds, computed from metrics.total_time or created/completed delta
+	Model       string  `json:"model"`
+	Version     string  `json:"version"`
+	Status      string  `json:"status"`
+	CreatedAt   string  `json:"created_at"`
+	CompletedAt string  `json:"completed_at"`
+	TimeToMake  float64 `json:"time_to_make"`
 	Mime        string  `json:"mime"`
 	PreviewKind string  `json:"preview_kind"` // image | video | audio | text | other
+	MetaPath    string  `json:"-"`            // path to <id>.metadata.json
 }
 
-// Load walks dir and returns one Entry per output file (files matching the
-// `id__idx_name` pattern written by the backend). Metadata sidecars are
-// loaded and joined; missing metadata is non-fatal.
-func Load(dir string) ([]Entry, error) {
+// Load walks dir and returns one Entry per output file. Metadata sidecars
+// are loaded and joined; missing metadata is non-fatal.
+//
+// If query is non-empty, only predictions whose metadata.json contains the
+// query (case-insensitive substring) are returned. The metadata file is the
+// raw JSON of the Replicate prediction response, so this matches against
+// inputs (e.g. the user's prompt), the model name, the version, output URLs,
+// etc. Output files without a metadata sidecar are excluded when query is
+// set; otherwise all output files are included.
+func Load(dir, query string) ([]Entry, error) {
 	dir = filepath.Clean(dir)
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -47,9 +52,16 @@ func Load(dir string) ([]Entry, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%s is not a directory", dir)
 	}
+	query = strings.ToLower(strings.TrimSpace(query))
 
 	// First pass: load every metadata sidecar keyed by id.
 	metaByID := make(map[string]*metadataFile)
+	type metaWithPath struct {
+		mf   *metadataFile
+		path string
+		data []byte
+	}
+	metaRaw := make(map[string]*metaWithPath)
 	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -59,15 +71,31 @@ func Load(dir string) ([]Entry, error) {
 			return nil
 		}
 		id := strings.TrimSuffix(name, ".metadata.json")
-		mf, err := loadMetadata(path, id)
+		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil // skip unreadable metadata
+			return nil
+		}
+		mf, err := loadMetadata(data, id)
+		if err != nil {
+			return nil
 		}
 		metaByID[id] = mf
+		metaRaw[id] = &metaWithPath{mf: mf, path: path, data: data}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Pre-compute matching id set when a query is set.
+	var matchIDs map[string]bool
+	if query != "" {
+		matchIDs = make(map[string]bool)
+		for id, mr := range metaRaw {
+			if strings.Contains(strings.ToLower(string(mr.data)), query) {
+				matchIDs[id] = true
+			}
+		}
 	}
 
 	// Second pass: one Entry per output file.
@@ -84,19 +112,25 @@ func Load(dir string) ([]Entry, error) {
 		if !ok {
 			return nil
 		}
+		if query != "" && !matchIDs[id] {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return nil
 		}
 		e := Entry{
-			ID:         id,
-			Filename:   name,
-			Path:       path,
-			Size:       info.Size(),
-			Model:      "unknown",
-			Status:     "unknown",
+			ID:          id,
+			Filename:    name,
+			Path:        path,
+			Size:        info.Size(),
+			Model:       "unknown",
+			Status:      "unknown",
 			PreviewKind: classify(name),
-			Mime:       mimeFromExt(name),
+			Mime:        mimeFromExt(name),
+		}
+		if mr, ok := metaRaw[id]; ok {
+			e.MetaPath = mr.path
 		}
 		if mf, ok := metaByID[id]; ok {
 			e.Model = orDefault(mf.Model, "unknown")
@@ -113,23 +147,69 @@ func Load(dir string) ([]Entry, error) {
 		return nil, err
 	}
 
-	// Sort newest first by created_at; unparseable / missing dates sink to bottom.
-	sort.SliceStable(entries, func(i, j int) bool {
-		ti, oki := parseTime(entries[i].CreatedAt)
-		tj, okj := parseTime(entries[j].CreatedAt)
-		switch {
-		case oki && okj:
-			return ti.After(tj)
-		case oki:
-			return true
-		case okj:
-			return false
-		default:
-			return entries[i].Filename < entries[j].Filename
-		}
-	})
-
+	// Default sort: newest first by created_at; missing dates sink to bottom.
+	sortBy(entries, "created_at", "desc")
 	return entries, nil
+}
+
+// SortField identifies a sortable column. Empty = default (created_at desc).
+type SortField string
+
+const (
+	SortByCreated SortField = "created_at"
+	SortByName    SortField = "filename"
+	SortByModel   SortField = "model"
+	SortByStatus  SortField = "status"
+	SortByTime    SortField = "time_to_make"
+	SortBySize    SortField = "size"
+)
+
+// SortDir is "asc" or "desc".
+type SortDir string
+
+const (
+	Asc  SortDir = "asc"
+	Desc SortDir = "desc"
+)
+
+// sortBy sorts entries in place by the given field and direction.
+func sortBy(entries []Entry, field SortField, dir SortDir) {
+	asc := dir == Asc
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		var less bool
+		switch field {
+		case SortByName:
+			less = strings.ToLower(a.Filename) < strings.ToLower(b.Filename)
+		case SortByModel:
+			less = strings.ToLower(a.Model) < strings.ToLower(b.Model)
+		case SortByStatus:
+			less = strings.ToLower(a.Status) < strings.ToLower(b.Status)
+		case SortByTime:
+			less = a.TimeToMake < b.TimeToMake
+		case SortBySize:
+			less = a.Size < b.Size
+		case SortByCreated, "":
+			ai, oki := parseTime(a.CreatedAt)
+			bi, okj := parseTime(b.CreatedAt)
+			switch {
+			case oki && okj:
+				less = ai.Before(bi)
+			case oki:
+				less = false
+			case okj:
+				less = true
+			default:
+				less = strings.ToLower(a.Filename) < strings.ToLower(b.Filename)
+			}
+		default:
+			less = false
+		}
+		if !asc {
+			less = !less
+		}
+		return less
+	})
 }
 
 // isOutputFile returns true for files written by replicate-safe (the
@@ -165,11 +245,7 @@ type metadataFile struct {
 	} `json:"metrics"`
 }
 
-func loadMetadata(path, id string) (*metadataFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+func loadMetadata(data []byte, id string) (*metadataFile, error) {
 	m := &metadataFile{}
 	if err := json.Unmarshal(data, m); err != nil {
 		return nil, err
@@ -199,7 +275,6 @@ func parseTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
-	// Try the common RFC3339 variants Replicate uses.
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t, true
@@ -298,4 +373,23 @@ func ReadMetadata(dir, id string) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+// FirstOutputFor returns the first output file path (basename) for the given
+// prediction id. Returns "" if no output file exists.
+func FirstOutputFor(dir, id string) (string, error) {
+	if strings.ContainsAny(id, "/\\.") || id == "" {
+		return "", ErrNotFound
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, id+"__*"))
+	if err != nil {
+		return "", err
+	}
+	for _, m := range matches {
+		base := filepath.Base(m)
+		if strings.Contains(base, "__") && !strings.HasSuffix(base, ".metadata.json") {
+			return base, nil
+		}
+	}
+	return "", ErrNotFound
 }
