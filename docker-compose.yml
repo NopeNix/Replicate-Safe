@@ -1,7 +1,6 @@
 services:
   replicate-safe:
-    build: .
-    image: replicate-safe:local
+    image: nopenix/replicate-safe:latest
     container_name: replicate-safe
     restart: unless-stopped
     env_file:
@@ -11,3 +10,17 @@ services:
       STATE_FILE: /data/.state.json
     volumes:
       - ./data:/data
+
+  frontend:
+    image: nopenix/replicate-safe-frontend:latest
+    container_name: replicate-safe-frontend
+    restart: unless-stopped
+    depends_on:
+      - replicate-safe
+    environment:
+      DATA_DIR: /data
+      LISTEN_ADDR: ":8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data:ro

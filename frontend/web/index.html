@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>replicate-safe</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='black'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <span>replicate-safe</span>
+      </div>
+      <div class="spacer"></div>
+      <div class="search">
+        <input id="filter" type="search" placeholder="filter by model, id, status…" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button id="refresh" title="Refresh listing">↻</button>
+        <button id="theme" title="Toggle theme">◐</button>
+      </div>
+    </header>
+
+    <main class="split">
+      <aside class="pane left">
+        <div class="list-header">
+          <span class="col-name">file</span>
+          <span class="col-model">model</span>
+          <span class="col-status">status</span>
+          <span class="col-time">time</span>
+          <span class="col-size">size</span>
+        </div>
+        <ul id="list" class="list" tabindex="0" aria-label="Predictions"></ul>
+        <div id="empty" class="empty" hidden>no predictions yet</div>
+      </aside>
+
+      <section class="pane right">
+        <div id="preview" class="preview empty">
+          <p>Select a file on the left to preview.</p>
+        </div>
+        <details id="meta" class="meta" hidden>
+          <summary>metadata.json</summary>
+          <pre id="meta-content"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
