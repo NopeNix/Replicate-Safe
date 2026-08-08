@@ -76,11 +76,39 @@
   function setCookie(name, value) {
     const d = new Date();
     d.setTime(d.getTime() + 365 * 86400 * 1000);
-    document.cookie = name + "=" + value + ";expires=" + d.toUTCString() + ";path=/;SameSite=Lax";
+    document.cookie = name + "=" + value + ";expires=" + d.toUTCString() + ";path=/";
   }
   function getCookie(name) {
     const m = document.cookie.match(new RegExp("(?:^|;\\s*)" + name + "\\s*=\\s*([^;]+)"));
     return m ? m[1] : "";
+  }
+  // localStorage-backed versions for layout state. Cookies are flaky in some
+  // browser configurations (strict cookie partitioning, private modes, etc.)
+  // so we mirror each layout value into localStorage and prefer that on read.
+  const LS_KEY = "replicate-safe-layout";
+  function loadLayout() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (_) { return {}; }
+  }
+  function saveLayout(patch) {
+    try {
+      const cur = loadLayout();
+      Object.assign(cur, patch);
+      localStorage.setItem(LS_KEY, JSON.stringify(cur));
+    } catch (_) { /* private mode etc. */ }
+  }
+  function readLayout(key) {
+    // Prefer localStorage; fall back to cookie.
+    const fromLS = loadLayout()[key];
+    if (fromLS != null && fromLS !== "") return fromLS;
+    const fromCookie = getCookie("replicate-safe-" + key);
+    return fromCookie || "";
+  }
+  function writeLayout(key, value) {
+    saveLayout({ [key]: value });
+    setCookie("replicate-safe-" + key, value);
   }
 
   // ----- helpers -----
@@ -547,8 +575,8 @@
   // ============================================================
 
   // ---- split divider (file explorer vs preview) ----
-  const SPLIT_KEY = "replicate-safe-split";
-  const savedSplit = parseInt(getCookie(SPLIT_KEY), 10);
+  const SPLIT_KEY = "split";
+  const savedSplit = parseInt(readLayout(SPLIT_KEY), 10);
   if (savedSplit > 0) {
     $root.style.setProperty("--split-left", savedSplit + "px");
   }
@@ -577,28 +605,35 @@
       document.body.classList.remove("resizing");
       $splitResizer.classList.remove("dragging");
       const px = parseFloat(getComputedStyle($root).getPropertyValue("--split-left"));
-      if (!isNaN(px)) setCookie(SPLIT_KEY, Math.round(px));
+      if (!isNaN(px)) writeLayout(SPLIT_KEY, Math.round(px));
     });
   }
 
   // ---- metadata: height + open/closed state ----
-  const META_KEY = "replicate-safe-meta-height";
-  const META_OPEN_KEY = "replicate-safe-meta-open";
+  // Persisted via writeLayout/readLayout (localStorage with cookie mirror).
+  const META_KEY = "meta-height";
+  const META_OPEN_KEY = "meta-open";
 
   // Restore height first (so the closed-state height matches user intent).
-  const savedMeta = parseInt(getCookie(META_KEY), 10);
-  if (savedMeta > 80 && savedMeta < window.innerHeight) {
-    $root.style.setProperty("--meta-height", savedMeta + "px");
+  // Apply it in three places to be defensive: CSS variable on :root, inline
+  // style on .meta itself, and the same inline style every time the meta
+  // becomes visible (see renderMeta helper).
+  const savedMeta = parseInt(readLayout(META_KEY), 10);
+  function applyMetaHeight(px) {
+    if (!Number.isFinite(px) || px < 80 || px > 5000) return;
+    $root.style.setProperty("--meta-height", px + "px");
+    if ($meta) $meta.style.minHeight = px + "px"; // belt-and-suspenders
   }
+  if (savedMeta > 0) applyMetaHeight(savedMeta);
 
   const $metaToggle = document.getElementById("meta-toggle");
   function setMetaOpen(open, persist) {
     $meta.classList.toggle("open", open);
     if ($metaToggle) $metaToggle.setAttribute("aria-expanded", open ? "true" : "false");
-    if (persist) setCookie(META_OPEN_KEY, open ? "1" : "0");
+    if (persist) writeLayout(META_OPEN_KEY, open ? "1" : "0");
   }
   // Restore open/closed state.
-  setMetaOpen(getCookie(META_OPEN_KEY) === "1", false);
+  setMetaOpen(readLayout(META_OPEN_KEY) === "1", false);
 
   if ($metaToggle) {
     $metaToggle.addEventListener("click", () => {
@@ -625,11 +660,11 @@
       const dy = startY - e.clientY;
       const min = 80, max = window.innerHeight - 200;
       const next = Math.max(min, Math.min(max, startH + dy));
-      $root.style.setProperty("--meta-height", next + "px");
-      // Throttle the cookie write to ~10 Hz so we don't churn storage on drag.
+      applyMetaHeight(next);
+      // Throttle the storage write to ~10 Hz so we don't churn storage on drag.
       const now = Date.now();
       if (now - lastWrite > 100) {
-        setCookie(META_KEY, Math.round(next));
+        writeLayout(META_KEY, Math.round(next));
         lastWrite = now;
       }
     });
@@ -639,16 +674,30 @@
       document.body.classList.remove("resizing-y");
       $metaHandle.classList.remove("dragging");
       const px = parseFloat(getComputedStyle($root).getPropertyValue("--meta-height"));
-      if (!isNaN(px)) setCookie(META_KEY, Math.round(px));
+      if (!isNaN(px)) writeLayout(META_KEY, Math.round(px));
     });
+  }
+
+  // Whenever the meta becomes visible (a file is selected), re-apply the
+  // stored height. This catches the case where the variable on :root is
+  // overridden by some intermediate state during the initial paint.
+  const reapplyMeta = () => {
+    const px = parseInt(readLayout(META_KEY), 10);
+    if (px > 0) applyMetaHeight(px);
+  };
+  if ($meta) {
+    const obs = new MutationObserver(() => {
+      if (!$meta.hidden) reapplyMeta();
+    });
+    obs.observe($meta, { attributes: true, attributeFilter: ["hidden"] });
   }
 
   // ---- image zoom ----
   const ZOOM_STEP = 1.25;
   const ZOOM_MIN = 0.25;
   const ZOOM_MAX = 16;
-  const ZOOM_KEY = "replicate-safe-zoom";
-  let zoom = parseFloat(getCookie(ZOOM_KEY)) || 1;
+  const ZOOM_KEY = "zoom";
+  let zoom = parseFloat(readLayout(ZOOM_KEY)) || 1;
 
   function applyZoom() {
     const el = $preview.querySelector("img, video");
@@ -656,7 +705,7 @@
       el.style.transform = "scale(" + zoom + ")";
     }
     $zoomVal.textContent = Math.round(zoom * 100) + "%";
-    setCookie(ZOOM_KEY, zoom.toFixed(3));
+    writeLayout(ZOOM_KEY, zoom.toFixed(3));
   }
   function setZoom(z) {
     zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
@@ -740,16 +789,21 @@
   // for both the header and every row in the list. Each width persists
   // in its own cookie.
 
-  const COLS_KEY = "replicate-safe-cols";
+  const COLS_KEY = "cols";
   function loadColWidths() {
+    // Try localStorage first, then cookie (encoded JSON).
     try {
-      const raw = getCookie(COLS_KEY);
+      const ls = loadLayout()[COLS_KEY];
+      if (ls) return ls;
+    } catch (_) {}
+    try {
+      const raw = getCookie("replicate-safe-" + COLS_KEY);
       if (!raw) return null;
       return JSON.parse(decodeURIComponent(raw));
     } catch (_) { return null; }
   }
   function saveColWidths(widths) {
-    setCookie(COLS_KEY, encodeURIComponent(JSON.stringify(widths)));
+    writeLayout(COLS_KEY, widths);
   }
 
   // Apply persisted widths on boot.
