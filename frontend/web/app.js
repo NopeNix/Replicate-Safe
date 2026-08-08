@@ -41,20 +41,22 @@
     $root.setAttribute("data-theme", next);
   });
 
-  // ----- preview size slider (cookie-persisted) -----
-  const PREVIEW_COOKIE = "replicate-safe-preview";
-  const PREVIEW_DEFAULT = 70;
-  function setPreviewSize(pct) {
-    pct = Math.max(20, Math.min(100, Math.round(pct)));
-    $size.value = pct;
-    $sizeVal.textContent = pct + "%";
-    // Map 20..100 slider -> 20vh..90vh preview max
-    const vh = Math.round(20 + (pct - 20) * (70 / 80));
-    document.documentElement.style.setProperty("--preview-max", vh + "vh");
-    setCookie(PREVIEW_COOKIE, pct);
+  // ----- thumbnail size slider (cookie-persisted) -----
+  // Drives the --thumb-size CSS variable on the file-explorer thumbnail
+  // column. The big preview on the right is unaffected.
+  const THUMB_COOKIE = "replicate-safe-thumb";
+  const THUMB_DEFAULT = 48; // px
+  const THUMB_MIN = 20;
+  const THUMB_MAX = 100;
+  function setThumbSize(px) {
+    px = Math.max(THUMB_MIN, Math.min(THUMB_MAX, Math.round(px)));
+    $size.value = px;
+    $sizeVal.textContent = px + "px";
+    document.documentElement.style.setProperty("--thumb-size", px + "px");
+    setCookie(THUMB_COOKIE, px);
   }
-  setPreviewSize(parseInt(getCookie(PREVIEW_COOKIE), 10) || PREVIEW_DEFAULT);
-  $size.addEventListener("input", (e) => setPreviewSize(parseInt(e.target.value, 10)));
+  setThumbSize(parseInt(getCookie(THUMB_COOKIE), 10) || THUMB_DEFAULT);
+  $size.addEventListener("input", (e) => setThumbSize(parseInt(e.target.value, 10)));
 
   // ----- cookie helpers -----
   function setCookie(name, value) {
