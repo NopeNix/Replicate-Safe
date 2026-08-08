@@ -328,6 +328,7 @@ input[type="search"]::placeholder { color: var(--muted); }
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -343,11 +344,24 @@ input[type="search"]::placeholder { color: var(--muted); }
   font-size: 13px;
   text-decoration: none;
   cursor: pointer;
-  transition: background 80ms ease, border-color 80ms ease;
+  transition: background 80ms ease, border-color 80ms ease, color 80ms ease;
   line-height: 1;
 }
 .btn:hover { background: var(--hover); border-color: var(--fg); }
 .btn svg { flex-shrink: 0; }
+
+.btn.btn-icon {
+  padding: 6px 9px;
+  min-width: 32px;
+  justify-content: center;
+}
+
+.btn.btn-feedback {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--selected-fg);
+}
+.btn.btn-feedback:hover { background: var(--accent); border-color: var(--accent); }
 
 .toolbar-divider {
   width: 1px;

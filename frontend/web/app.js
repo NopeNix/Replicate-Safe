@@ -24,6 +24,10 @@
   const $toolbar = document.getElementById("toolbar");
   const $download = document.getElementById("download-btn");
   const $convert = document.getElementById("convert-to");
+  const $shareTg = document.getElementById("share-telegram");
+  const $shareWa = document.getElementById("share-whatsapp");
+  const $copyLink = document.getElementById("copy-link");
+  const $copyImage = document.getElementById("copy-image");
 
   // ----- theme -----
   const THEME_KEY = "replicate-safe-theme";
@@ -271,10 +275,19 @@
       return;
     }
     $toolbar.hidden = false;
-    const url = "/file?id=" + encodeURIComponent(e.id);
-    $download.href = url;
+    const fileUrl = window.location.origin + "/file?id=" + encodeURIComponent(e.id);
+    const url = fileUrl; // local alias for the preview element below
+    $download.href = fileUrl;
     $download.setAttribute("download", e.filename);
     $toolbar.classList.toggle("is-image", e.preview_kind === "image");
+    // Share URLs (built lazily so the latest origin is used)
+    const shareText = e.filename;
+    $shareTg.href = "https://t.me/share/url?url=" + encodeURIComponent(fileUrl) + "&text=" + encodeURIComponent(shareText);
+    $shareWa.href = "https://wa.me/?text=" + encodeURIComponent(fileUrl + "\n" + shareText);
+    // Stash the URL on the copy buttons so handlers can grab it
+    $copyLink.dataset.url = fileUrl;
+    $copyImage.dataset.url = fileUrl;
+    $copyImage.dataset.id = e.id;
     // reset convert picker whenever a new entry is selected
     if ($convert) $convert.value = "";
     let el;
@@ -383,6 +396,90 @@
   });
 
   $refresh.addEventListener("click", () => loadList());
+
+  // ----- shared helpers for the copy / share buttons -----
+  function showFeedback(btn, text) {
+    if (!btn) return;
+    const originalTitle = btn.dataset.origTitle || btn.getAttribute("title") || "";
+    btn.dataset.origTitle = originalTitle;
+    btn.classList.add("btn-feedback");
+    // Swap the icon for a brief text label, then restore.
+    const svg = btn.querySelector("svg");
+    let label = btn.querySelector(".btn-label");
+    if (!label) {
+      label = document.createElement("span");
+      label.className = "btn-label";
+      label.style.marginLeft = "4px";
+      btn.appendChild(label);
+    }
+    if (svg) svg.style.display = "none";
+    label.textContent = text;
+    label.style.display = "";
+    btn.setAttribute("title", text);
+    setTimeout(() => {
+      btn.classList.remove("btn-feedback");
+      if (svg) svg.style.display = "";
+      label.style.display = "none";
+      btn.setAttribute("title", originalTitle);
+    }, 1400);
+  }
+
+  async function copyText(btn, text, okMsg, failMsg) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback for non-secure contexts (e.g. http://192.168.x.x).
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (!ok) throw new Error("execCommand copy failed");
+      }
+      showFeedback(btn, okMsg);
+    } catch (err) {
+      console.error("copy failed", err);
+      showFeedback(btn, failMsg);
+    }
+  }
+
+  // ----- copy link -----
+  if ($copyLink) {
+    $copyLink.addEventListener("click", () => {
+      const url = $copyLink.dataset.url;
+      if (!url) return;
+      copyText($copyLink, url, "Copied!", "Failed");
+    });
+  }
+
+  // ----- copy image -----
+  // Browsers only accept image/png in the clipboard (per spec), so we go
+  // through /convert?to=png first so the user gets reliable cross-browser
+  // behavior regardless of source format.
+  if ($copyImage) {
+    $copyImage.addEventListener("click", async () => {
+      const id = $copyImage.dataset.id;
+      if (!id) return;
+      const btn = $copyImage;
+      try {
+        if (!navigator.clipboard || !window.ClipboardItem) {
+          throw new Error("Clipboard API not available");
+        }
+        const res = await fetch("/convert?id=" + encodeURIComponent(id) + "&to=png");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const blob = await res.blob();
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        showFeedback(btn, "Copied!");
+      } catch (err) {
+        console.error("copy image failed", err);
+        showFeedback(btn, "Failed");
+      }
+    });
+  }
 
   // ----- convert dropdown -----
   if ($convert) {
