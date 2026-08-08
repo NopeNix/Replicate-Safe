@@ -309,6 +309,7 @@ input[type="search"]::placeholder { color: var(--muted); }
 [hidden] { display: none !important; }
 
 .right {
+  position: relative;
   overflow: auto;
   padding: 20px;
   gap: 16px;
@@ -334,6 +335,13 @@ input[type="search"]::placeholder { color: var(--muted); }
     linear-gradient(-45deg, transparent 75%, var(--line) 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* "select a file to preview" placeholder. Scoped to .preview so it never
+   escapes the right pane and overlays the rest of the UI. */
+.preview.idle {
+  background-image: none;
+  background: var(--bg);
 }
 
 .preview img,

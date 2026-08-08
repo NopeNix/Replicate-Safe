@@ -253,10 +253,10 @@
 
   // ----- preview rendering -----
   const renderPreview = (e) => {
-    $preview.classList.remove("empty");
+    $preview.classList.remove("idle");
     $preview.innerHTML = "";
     if (!e) {
-      $preview.classList.add("empty");
+      $preview.classList.add("idle");
       const p = document.createElement("p");
       p.textContent = "Select a file on the left to preview.";
       $preview.appendChild(p);
