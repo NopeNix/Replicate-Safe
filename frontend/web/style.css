@@ -139,6 +139,7 @@ input[type="search"]::placeholder { color: var(--muted); }
 
 .pane.left {
   border-right: 1px solid var(--line);
+  position: relative;
 }
 
 .list-header,
@@ -169,6 +170,8 @@ input[type="search"]::placeholder { color: var(--muted); }
   padding: 0;
   overflow-y: auto;
   outline: none;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .list li {
@@ -211,11 +214,13 @@ input[type="search"]::placeholder { color: var(--muted); }
 .list li.selected .badge.fail { color: var(--selected-fg); border-color: var(--selected-fg); }
 
 .empty {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
   color: var(--muted);
+  pointer-events: none;
 }
 [hidden] { display: none !important; }
 
