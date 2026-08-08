@@ -90,10 +90,13 @@
           </button>
         </div>
         <div class="meta-handle" id="meta-handle" hidden aria-label="Resize metadata"></div>
-        <details id="meta" class="meta" hidden>
-          <summary>metadata.json</summary>
+        <div id="meta" class="meta" hidden>
+          <button id="meta-toggle" type="button" class="meta-summary" aria-expanded="false">
+            <span class="meta-arrow" aria-hidden="true">▸</span>
+            <span>metadata.json</span>
+          </button>
           <pre id="meta-content"></pre>
-        </details>
+        </div>
       </section>
     </main>
 

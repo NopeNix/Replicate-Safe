@@ -490,6 +490,14 @@ body.resizing-col * {
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 
+.preview.has-media {
+  cursor: grab;
+}
+.preview.panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
 /* "select a file to preview" placeholder. Scoped to .preview so it never
    escapes the right pane and overlays the rest of the UI. */
 .preview.idle {
@@ -579,17 +587,34 @@ body.resizing-col * {
   flex-direction: column;
   overflow: hidden;
 }
-.meta summary {
+.meta-summary {
   cursor: pointer;
   padding: 10px 14px;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--muted);
+  border: none;
   border-bottom: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
   user-select: none;
   flex-shrink: 0;
+  font-weight: normal;
 }
-.meta[open] summary { border-bottom-color: var(--line); }
+.meta-summary:hover { color: var(--fg); }
+.meta-summary .meta-arrow {
+  display: inline-block;
+  width: 10px;
+  font-size: 10px;
+  transition: transform 80ms ease-out;
+}
+.meta.open .meta-summary { border-bottom-color: var(--line); }
+.meta.open .meta-arrow { transform: rotate(90deg); }
+.meta:not(.open) pre { display: none; }
 .meta pre {
   margin: 0;
   padding: 14px;

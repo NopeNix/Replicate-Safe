@@ -279,6 +279,7 @@
       $toolbar.hidden = true;
       $toolbar.classList.remove("is-image");
       $download.removeAttribute("href");
+      $preview.classList.remove("has-media");
       return;
     }
     $toolbar.hidden = false;
@@ -289,6 +290,8 @@
     $toolbar.classList.toggle("is-image", e.preview_kind === "image");
     $zoomControls.hidden = e.preview_kind !== "image" && e.preview_kind !== "video";
     $metaHandle.hidden = false;
+    // Grab cursor + pan support are only relevant for zoomable content.
+    $preview.classList.toggle("has-media", e.preview_kind === "image" || e.preview_kind === "video");
     // Share URLs (built lazily so the latest origin is used)
     const shareText = e.filename;
     $shareTg.href = "https://t.me/share/url?url=" + encodeURIComponent(fileUrl) + "&text=" + encodeURIComponent(shareText);
@@ -578,20 +581,40 @@
     });
   }
 
-  // ---- metadata height handle ----
+  // ---- metadata: height + open/closed state ----
   const META_KEY = "replicate-safe-meta-height";
+  const META_OPEN_KEY = "replicate-safe-meta-open";
+
+  // Restore height first (so the closed-state height matches user intent).
   const savedMeta = parseInt(getCookie(META_KEY), 10);
-  if (savedMeta > 80) {
+  if (savedMeta > 80 && savedMeta < window.innerHeight) {
     $root.style.setProperty("--meta-height", savedMeta + "px");
   }
+
+  const $metaToggle = document.getElementById("meta-toggle");
+  function setMetaOpen(open, persist) {
+    $meta.classList.toggle("open", open);
+    if ($metaToggle) $metaToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (persist) setCookie(META_OPEN_KEY, open ? "1" : "0");
+  }
+  // Restore open/closed state.
+  setMetaOpen(getCookie(META_OPEN_KEY) === "1", false);
+
+  if ($metaToggle) {
+    $metaToggle.addEventListener("click", () => {
+      setMetaOpen(!$meta.classList.contains("open"), true);
+    });
+  }
+
   if ($metaHandle) {
     let dragging = false;
     let startY = 0;
     let startH = 0;
+    let lastWrite = 0;
     $metaHandle.addEventListener("mousedown", (e) => {
       dragging = true;
       startY = e.clientY;
-      startH = $meta.parentElement.querySelector("#meta").getBoundingClientRect().height;
+      startH = $meta.getBoundingClientRect().height;
       document.body.classList.add("resizing-y");
       $metaHandle.classList.add("dragging");
       e.preventDefault();
@@ -601,8 +624,14 @@
       // Dragging UP increases the metadata height (since the handle is at the top).
       const dy = startY - e.clientY;
       const min = 80, max = window.innerHeight - 200;
-      let next = Math.max(min, Math.min(max, startH + dy));
+      const next = Math.max(min, Math.min(max, startH + dy));
       $root.style.setProperty("--meta-height", next + "px");
+      // Throttle the cookie write to ~10 Hz so we don't churn storage on drag.
+      const now = Date.now();
+      if (now - lastWrite > 100) {
+        setCookie(META_KEY, Math.round(next));
+        lastWrite = now;
+      }
     });
     document.addEventListener("mouseup", () => {
       if (!dragging) return;
@@ -639,14 +668,56 @@
   if ($zoomOut) $zoomOut.addEventListener("click", () => setZoom(zoom / ZOOM_STEP));
   if ($zoomReset) $zoomReset.addEventListener("click", resetZoom);
 
-  // Wheel-to-zoom inside the preview area when ctrl/cmd is held (standard
-  // browser zoom gesture). Otherwise let the wheel scroll normally.
+  // Wheel-to-zoom inside the preview area (plain wheel, no modifier).
+  // The preview area's overflow:auto lets the user scroll-pan with the
+  // wheel for non-zoomable content (audio, text, etc.).
   $preview.addEventListener("wheel", (e) => {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    if (!$preview.querySelector("img, video")) return;
+    const target = $preview.querySelector("img, video");
+    if (!target) return;
+    // Zoom only when the image fills the preview (zoomed in or at least
+    // large enough that wheel-zoom feels useful); otherwise let the
+    // wheel scroll the preview container naturally.
+    if (zoom <= 1 && target.clientWidth * zoom <= $preview.clientWidth - 32
+                  && target.clientHeight * zoom <= $preview.clientHeight - 32) {
+      return;
+    }
     e.preventDefault();
     setZoom(zoom * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
   }, { passive: false });
+
+  // Drag-to-pan: when zoomed in past the container bounds, dragging
+  // adjusts scrollLeft/scrollTop so the user can see all parts of the
+  // scaled image. Works for any element with .has-media on the preview.
+  let panning = false;
+  let panStartX = 0, panStartY = 0;
+  let panStartScrollLeft = 0, panStartScrollTop = 0;
+  $preview.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    if (!$preview.classList.contains("has-media")) return;
+    // Don't pan when clicking on a button/control inside the preview.
+    if (e.target.closest("button, a, select, input, .zoom-controls")) return;
+    panning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panStartScrollLeft = $preview.scrollLeft;
+    panStartScrollTop = $preview.scrollTop;
+    $preview.classList.add("panning");
+    document.body.classList.add("resizing");
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!panning) return;
+    const dx = e.clientX - panStartX;
+    const dy = e.clientY - panStartY;
+    $preview.scrollLeft = panStartScrollLeft - dx;
+    $preview.scrollTop = panStartScrollTop - dy;
+  });
+  document.addEventListener("mouseup", () => {
+    if (!panning) return;
+    panning = false;
+    $preview.classList.remove("panning");
+    document.body.classList.remove("resizing");
+  });
 
   // Keyboard: when the preview has an image/video focused, +/-/0 zoom.
   document.addEventListener("keydown", (e) => {
