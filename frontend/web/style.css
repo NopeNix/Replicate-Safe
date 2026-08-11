@@ -221,6 +221,7 @@ body.resizing-y, body.resizing-y * {
 .pane.left {
   border-right: 1px solid var(--line);
   position: relative;
+  scroll-margin-top: 56px;
 }
 
 /* ---- file list ---- */
@@ -631,23 +632,82 @@ body.resizing-col * {
 }
 
 @media (max-width: 900px) {
-  .split { grid-template-columns: 1fr 6px 1fr; grid-template-rows: 45% 1fr; }
-  .pane.left { border-right: none; border-bottom: 1px solid var(--line); }
+  /* Allow the page to scroll on mobile (instead of viewport-locked). */
+  html, body {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  body { display: block; } /* un-do desktop's flex column on <body> */
+
+  /* Compact, wrap-able topbar that stays in view while scrolling. */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 12px;
+    gap: 6px;
+  }
+  .topbar .brand { font-size: 13px; }
+  .topbar .search input { width: 160px; }
+  .preview-size { padding: 4px 8px; }
+
+  /* Split becomes a vertical stack: file explorer on top, preview below. */
+  .split {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    min-height: auto;
+  }
   .resizer-x { display: none; }
+
+  .pane.left {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+    height: 50vh;
+    min-height: 240px;
+    max-height: 50vh;
+  }
+  .pane.right {
+    flex: 0 0 auto;
+    min-height: 70vh;
+    /* Leave room for the sticky topbar when scrollIntoView fires. */
+    scroll-margin-top: 56px;
+  }
+
+  /* Compact row: drop to 3 columns (thumb, name, size) and shrink padding. */
   .list-header,
-  .list li { grid-template-columns: calc(var(--thumb-size) + 12px) 1fr 70px; }
-  .list-header .col-model,
-  .list-header .col-status,
-  .list-header .col-time,
-  .list-header .col-size,
-  .list-header .col-created,
-  .list li .col-model,
-  .list li .col-status,
-  .list li .col-time,
-  .list li .col-size,
-  .list li .col-created { display: none; }
-  input[type="search"] { width: 140px; }
+  .list li {
+    grid-template-columns: calc(var(--thumb-size) + 12px) 1fr auto;
+    padding: 6px 10px;
+    gap: 8px;
+  }
+  /* Hide the columns we don't need on mobile. Header cells with
+     data-sort have specificity 0,2,1 from .list-header span[data-sort],
+     so we match that with span.col-* on each side. */
+  .list-header span.col-created,
+  .list-header span.col-model,
+  .list-header span.col-status,
+  .list-header span.col-time,
+  .list li span.col-created,
+  .list li span.col-model,
+  .list li span.col-status,
+  .list li span.col-time { display: none; }
+
+  /* Allow preview images/video to fill the phone width. */
+  .preview img,
+  .preview video { max-width: 95vw; max-height: 60vh; }
+
+  /* Toolbar wraps more aggressively. */
+  .toolbar { flex-wrap: wrap; gap: 6px; }
+  .toolbar .btn-icon { padding: 5px 7px; }
+
   .footer .credit { display: none; }
+  .footer { padding: 0 10px; }
 }
 
 /* ---- footer ---- */

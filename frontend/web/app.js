@@ -35,6 +35,13 @@
   const $zoomReset = document.getElementById("zoom-reset");
   const $splitResizer = document.getElementById("split-resizer");
   const $metaHandle = document.getElementById("meta-handle");
+  const $paneLeft = document.querySelector(".pane.left");
+  const $paneRight = document.getElementById("pane-right");
+
+  // Detect mobile layout once at startup. Used to decide whether to
+  // scroll the page to the preview pane when a row is clicked.
+  const isMobile = () =>
+    window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
 
   // ----- theme -----
   const THEME_KEY = "replicate-safe-theme";
@@ -289,7 +296,17 @@
       cSize.textContent = fmtSize(e.size);
       li.appendChild(cSize);
 
-      li.addEventListener("click", () => selectEntry(e.id));
+      li.addEventListener("click", () => {
+        selectEntry(e.id);
+        // On mobile the layout stacks vertically; after selecting a row,
+        // scroll the preview pane into view so the user immediately sees
+        // what they picked.
+        if (isMobile() && $paneRight) {
+          requestAnimationFrame(() => {
+            $paneRight.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+        }
+      });
       $list.appendChild(li);
     }
     $empty.hidden = count > 0;
